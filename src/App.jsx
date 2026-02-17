@@ -1198,14 +1198,16 @@ function Login({ onLogin, savedCreds, savedAccounts, onSelectAccount, onDeleteSa
       }
     } catch (err) {
       setStatus('error');
-      // Check if this is a proxy/connection error vs auth error
-      if (err.message && err.message.startsWith('PROXY_ERROR:')) {
+      // Check error type for specific messages
+      if (err.message && err.message.startsWith('FIREWALL_BLOCK:')) {
+        setErrorMsg('🚫 Server Firewall Block: The IPTV server is blocking the connection. Try using a different port or check if the server allows web-based players.');
+      } else if (err.message && err.message.startsWith('PROXY_ERROR:')) {
         const detail = err.message.replace('PROXY_ERROR: ', '');
         setErrorMsg(`Proxy Connection Error: ${detail}`);
       } else {
         setErrorMsg(`Connection failed: ${err.message}`);
       }
-      setTimeout(() => setStatus('idle'), 6000);
+      setTimeout(() => setStatus('idle'), 8000);
     }
   };
 

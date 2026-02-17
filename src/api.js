@@ -92,6 +92,7 @@ async function tryFetch(label, fetchUrl, timeoutMs) {
         // Not OK — log the exact status and try to read error body
         let errorBody = '';
         let isProxyError = false;
+        let isFirewallBlock = false;
         let proxyErrorMsg = '';
         try { errorBody = await resp.text(); } catch (_) { }
 
@@ -104,9 +105,21 @@ async function tryFetch(label, fetchUrl, timeoutMs) {
                 if (errJson.proxyError) {
                     isProxyError = true;
                     proxyErrorMsg = errJson.error || `Proxy error (HTTP ${resp.status})`;
+                    if (errJson.firewallBlock) {
+                        isFirewallBlock = true;
+                        console.error(`[API] 🚫 FIREWALL BLOCK (HTTP 456) detected!`);
+                    }
                     if (errJson.suggestion) console.info(`[API] 💡 ${errJson.suggestion}`);
                 }
-            } catch (_) { /* not JSON, that's fine */ }
+            } catch (_) { /* not JSON */ }
+        }
+
+        // Also detect raw 456 even without JSON body
+        if (resp.status === 456) {
+            isFirewallBlock = true;
+            isProxyError = true;
+            if (!proxyErrorMsg) proxyErrorMsg = 'Server Firewall Block (HTTP 456): The IPTV server is blocking this connection.';
+            console.error(`[API] 🚫 HTTP 456 — Server firewall is blocking the request`);
         }
 
         return {
@@ -115,6 +128,7 @@ async function tryFetch(label, fetchUrl, timeoutMs) {
             statusText: resp.statusText,
             body: errorBody,
             isProxyError,
+            isFirewallBlock,
             proxyErrorMsg,
         };
 
@@ -123,7 +137,7 @@ async function tryFetch(label, fetchUrl, timeoutMs) {
         const isAbort = e.name === 'AbortError';
         const isMixed = e.message && e.message.includes('Mixed Content');
         console.warn(`[API] ⚠️ ${label} → ${isAbort ? 'TIMEOUT' : isMixed ? 'MIXED CONTENT BLOCKED' : e.message}`);
-        return { success: false, error: e.message, isTimeout: isAbort, isMixedContent: isMixed, isProxyError: true, proxyErrorMsg: e.message };
+        return { success: false, error: e.message, isTimeout: isAbort, isMixedContent: isMixed, isProxyError: true, isFirewallBlock: false, proxyErrorMsg: e.message };
     }
 }
 
@@ -384,6 +398,13 @@ export const xtreamService = {
                 const msg = data.error || 'Proxy connection failed';
                 console.error(`[API] 🔴 Proxy connection error: ${msg}`);
                 if (data.suggestion) console.info(`[API] 💡 ${data.suggestion}`);
+
+                // Specific: firewall block (HTTP 456)
+                if (data.firewallBlock) {
+                    console.error('[API] 🚫 FIREWALL BLOCK — the IPTV server is actively rejecting connections');
+                    throw new Error(`FIREWALL_BLOCK: ${msg}`);
+                }
+
                 throw new Error(`PROXY_ERROR: ${msg}`);
             }
 
