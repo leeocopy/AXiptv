@@ -48,19 +48,23 @@ html {
   align-items: center;
   min-height: 100vh;
   width: 100%;
-  padding: 2rem;
+  padding: 40px;
+  /* Safe Area for TV */
   background: radial-gradient(circle at 20% 50%, rgba(76, 29, 149, 0.2), transparent 50%),
     radial-gradient(circle at 80% 20%, rgba(29, 78, 216, 0.15), transparent 50%);
+  background-size: cover;
+  background-position: center;
 }
 
 .content-wrapper {
   display: flex;
-  flex-direction: row;
-  justify-content: space-between;
+  flex-direction: column;
+  /* Mobile first: stack vertically */
+  justify-content: center;
   align-items: center;
   width: 100%;
   max-width: 1200px;
-  gap: 4rem;
+  gap: 2rem;
 }
 
 /* --- Dashboard Specific Styles --- */
@@ -1210,6 +1214,7 @@ html {
   /* Center on mobile by default */
   text-align: center;
   padding: 1rem;
+  max-width: 100%;
 }
 
 .logo-container {
@@ -1217,7 +1222,8 @@ html {
   flex-direction: column;
   align-items: center;
   margin-bottom: 1.5rem;
-  max-width: 100%;
+  max-width: 80%;
+  /* Prevent cut-off */
 }
 
 .tv-icon {
@@ -1230,29 +1236,42 @@ html {
 }
 
 .brand-title {
-  font-size: 3rem;
+  font-size: 2.5rem;
+  /* Smaller on mobile to fit */
   font-weight: 800;
-  letter-spacing: -2px;
-  line-height: 1;
+  letter-spacing: -1px;
+  line-height: 1.1;
   background: linear-gradient(to right, #fff, #cbd5e1);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
   text-shadow: 0 0 30px rgba(255, 255, 255, 0.1);
   margin-top: 1rem;
+  max-width: 100%;
+  word-wrap: break-word;
 }
 
-/* Media Query for larger screens (Desktop/TV) */
+/* Media Query for Landscape / TV / Tablet */
 @media (min-width: 768px) {
+  .content-wrapper {
+    flex-direction: row;
+    /* Switch to row layout */
+    justify-content: space-between;
+    align-items: center;
+    gap: 4rem;
+    padding: 0;
+  }
+
   .branding-section {
     align-items: flex-start;
     /* Left-align on desktop */
     text-align: left;
-    padding-left: 2rem;
+    padding-left: 1rem;
   }
 
   .logo-container {
     align-items: flex-start;
+    max-width: 100%;
   }
 
   .tv-icon {
@@ -1262,11 +1281,6 @@ html {
 
   .brand-title {
     font-size: 4rem;
-  }
-
-  .content-wrapper {
-    padding: 2rem;
-    /* Add TV overscan padding here too just in case */
   }
 }
 
