@@ -1,9 +1,10 @@
 // ============================================
 // Xtream Codes API Service
 // ============================================
-// - Uses Vercel Serverless Proxy (/api/proxy) to bypass CORS + Mixed Content
-// - Falls back to public CORS proxies on localhost
-// - Full debug logging — open browser console (F12) to see everything
+// - Native (Capacitor APK): Direct fetch — no CORS, no proxy needed
+// - Vercel (web): Uses /api/proxy serverless function
+// - Localhost (dev): Falls back to public CORS proxies
+// - Full debug logging — open browser console (F12)
 
 const MOCK_DELAY = 800;
 
@@ -11,15 +12,27 @@ const MOCK_DELAY = 800;
 // ENVIRONMENT DETECTION
 // ============================================
 const _hostname = typeof window !== 'undefined' ? window.location.hostname : '';
-const IS_LOCALHOST = _hostname === 'localhost' || _hostname === '127.0.0.1' || _hostname === '';
-const IS_VERCEL = !IS_LOCALHOST && (
+
+// Capacitor native app detection (Android/iOS APK)
+const IS_NATIVE = typeof window !== 'undefined' && (
+    window.Capacitor !== undefined ||
+    window.location.protocol === 'capacitor:' ||
+    window.location.protocol === 'ionic:' ||
+    window.location.hostname === 'localhost' && window.Capacitor !== undefined ||
+    navigator.userAgent.includes('CapacitorJS')
+);
+
+const IS_LOCALHOST = !IS_NATIVE && (_hostname === 'localhost' || _hostname === '127.0.0.1' || _hostname === '');
+const IS_VERCEL = !IS_NATIVE && !IS_LOCALHOST && (
     _hostname.endsWith('.vercel.app') ||
     _hostname.endsWith('.vercel.sh') ||
-    // Custom domain on Vercel — we'll detect via the proxy working
     !IS_LOCALHOST
 );
 
-console.log(`[API] 🌐 Environment: hostname=${_hostname}, IS_LOCALHOST=${IS_LOCALHOST}, IS_VERCEL=${IS_VERCEL}`);
+console.log(`[API] 🌐 Environment: hostname=${_hostname}, IS_NATIVE=${IS_NATIVE}, IS_LOCALHOST=${IS_LOCALHOST}, IS_VERCEL=${IS_VERCEL}`);
+if (IS_NATIVE) {
+    console.log('[API] 📱 Running as NATIVE APP — direct fetch, no proxy needed!');
+}
 
 // ============================================
 // PROXY CONFIGURATION
@@ -30,7 +43,7 @@ function getVercelProxyUrl(url) {
     return `/api/proxy?url=${encodeURIComponent(url)}`;
 }
 
-// Public CORS proxies (fallback — works everywhere)
+// Public CORS proxies (fallback — only for web)
 const PUBLIC_PROXIES = [
     (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
     (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
@@ -38,7 +51,7 @@ const PUBLIC_PROXIES = [
 ];
 
 // Track which proxy method works (cached after first success)
-let _proxyMode = null; // 'vercel' | 'public' | 'direct' | null
+let _proxyMode = IS_NATIVE ? 'direct' : null; // Native = always direct
 
 // ============================================
 // URL VALIDATION
