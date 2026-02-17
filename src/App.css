@@ -1200,32 +1200,38 @@ html {
 }
 
 /* Original Login Styles (Retained) */
+/* Responsive Branding Section */
 .branding-section {
   flex: 1;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  align-items: flex-start;
-  padding: 2rem;
+  align-items: center;
+  /* Center on mobile by default */
+  text-align: center;
+  padding: 1rem;
 }
 
 .logo-container {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  margin-bottom: 1rem;
+  align-items: center;
+  margin-bottom: 1.5rem;
+  max-width: 100%;
 }
 
 .tv-icon {
-  width: 160px;
-  height: 160px;
-  margin-bottom: 1rem;
-  filter: drop-shadow(0 0 20px rgba(96, 165, 250, 0.3));
+  width: 120px;
+  /* Base size */
+  max-width: 100%;
+  height: auto;
+  filter: drop-shadow(0 0 20px rgba(96, 165, 250, 0.4));
+  animation: float 6s ease-in-out infinite;
 }
 
 .brand-title {
-  font-size: 4rem;
-  font-weight: 700;
+  font-size: 3rem;
+  font-weight: 800;
   letter-spacing: -2px;
   line-height: 1;
   background: linear-gradient(to right, #fff, #cbd5e1);
@@ -1233,6 +1239,35 @@ html {
   background-clip: text;
   -webkit-text-fill-color: transparent;
   text-shadow: 0 0 30px rgba(255, 255, 255, 0.1);
+  margin-top: 1rem;
+}
+
+/* Media Query for larger screens (Desktop/TV) */
+@media (min-width: 768px) {
+  .branding-section {
+    align-items: flex-start;
+    /* Left-align on desktop */
+    text-align: left;
+    padding-left: 2rem;
+  }
+
+  .logo-container {
+    align-items: flex-start;
+  }
+
+  .tv-icon {
+    width: 160px;
+    /* Larger on desktop */
+  }
+
+  .brand-title {
+    font-size: 4rem;
+  }
+
+  .content-wrapper {
+    padding: 2rem;
+    /* Add TV overscan padding here too just in case */
+  }
 }
 
 .highlight-text {
@@ -1257,21 +1292,24 @@ html {
   display: flex;
   justify-content: center;
   align-items: center;
+  padding: 1rem;
 }
 
 .glass-card {
-  width: 100%;
-  max-width: 480px;
+  width: 90%;
+  max-width: 400px;
+  /* Fits small phones better */
   background: var(--glass-bg);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border: 1px solid var(--glass-border);
   border-radius: 24px;
-  padding: 3rem 2.5rem;
+  padding: 2rem 1.5rem;
+  /* Slightly less padding on mobile */
   box-shadow: var(--glass-shadow);
   display: flex;
   flex-direction: column;
-  gap: 2rem;
+  gap: 1.5rem;
   position: relative;
   overflow: hidden;
 }

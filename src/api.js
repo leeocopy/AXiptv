@@ -14,11 +14,13 @@ const MOCK_DELAY = 800;
 const _hostname = typeof window !== 'undefined' ? window.location.hostname : '';
 
 // Capacitor native app detection (Android/iOS APK)
+// Capacitor native app detection (Android/iOS APK)
 const IS_NATIVE = typeof window !== 'undefined' && (
-    window.Capacitor !== undefined ||
+    (window.Capacitor && window.Capacitor.getPlatform() !== 'web') ||
     window.location.protocol === 'capacitor:' ||
     window.location.protocol === 'ionic:' ||
-    window.location.hostname === 'localhost' && window.Capacitor !== undefined ||
+    // Some android builds serve from http or https but have Capacitor injected
+    (window.Capacitor !== undefined && (window.location.hostname === 'localhost' || window.location.protocol.startsWith('http'))) ||
     navigator.userAgent.includes('CapacitorJS')
 );
 
@@ -161,10 +163,57 @@ async function smartFetch(targetUrl, timeoutMs = 15000) {
     console.log(`[API] ─────────────────────────────────────`);
     console.log(`[API] 📡 smartFetch: ${targetUrl}`);
 
+    // ── Strategy 0: NATIVE APP (Force Direct Fetch) ──
+    if (IS_NATIVE) {
+        console.log('[API] 📱 NATIVE APP DETECTED — FORCING DIRECT FETCH');
+        const controller = new AbortController();
+        const tid = setTimeout(() => controller.abort(), timeoutMs);
+
+        try {
+            // Add headers to mimic IPTV Smarters
+            // Note: 'User-Agent' might be blocked by some WebViews, but we try anyway.
+            // X-Requested-With is critical for many panels.
+            const headers = {
+                'X-Requested-With': 'com.nst.iptvsmarterstvbox',
+                'Accept': '*/*',
+                'Connection': 'keep-alive'
+            };
+
+            const resp = await fetch(targetUrl, {
+                signal: controller.signal,
+                headers: headers
+            });
+            clearTimeout(tid);
+
+            if (resp.ok) {
+                console.log(`[API] ✅ Native Direct Fetch SUCCESS → HTTP ${resp.status}`);
+                return resp;
+            } else {
+                console.warn(`[API] ⚠️ Native Direct Fetch HTTP ${resp.status}`);
+                throw new Error(`Server returned HTTP ${resp.status}`);
+            }
+        } catch (e) {
+            clearTimeout(tid);
+            console.error(`[API] 🔴 Native Direct Fetch FAILED: ${e.message}`);
+
+            // If direct fetch fails on native, we have no fallback (proxy won't work).
+            // But we can try one last desperate attempt without custom headers
+            // in case CORS preflight deemed them "unsafe" and blocked the request.
+            if (e.message.includes('Failed to fetch') || e.name === 'TypeError') {
+                console.log('[API] 🔄 Retrying Native Fetch without custom headers...');
+                try {
+                    const retryResp = await fetch(targetUrl, { signal: controller.signal });
+                    if (retryResp.ok) return retryResp;
+                } catch (_) { }
+            }
+            throw new Error(`Native connection failed: ${e.message}. Check internet or URL.`);
+        }
+    }
+
     let lastError = null;
 
-    // ── Strategy 1: Vercel Proxy (SKIP on localhost) ──
-    if (!IS_LOCALHOST && (_proxyMode === null || _proxyMode === 'vercel')) {
+    // ── Strategy 1: Vercel Proxy (web only, SKIP on localhost/native) ──
+    if (!IS_LOCALHOST && !IS_NATIVE && (_proxyMode === null || _proxyMode === 'vercel')) {
         const proxyUrl = getVercelProxyUrl(targetUrl);
         console.log(`[API] 🔀 [1/3] Vercel proxy: ${proxyUrl.substring(0, 80)}...`);
 
@@ -190,7 +239,10 @@ async function smartFetch(targetUrl, timeoutMs = 15000) {
                     const errData = JSON.parse(result.body);
                     if (errData.error) console.error(`[API] 🔴 Proxy error: ${errData.error}`);
                     if (errData.suggestion) console.info(`[API] 💡 ${errData.suggestion}`);
-                } catch (_) { }
+                    if (errData.firewallBlock) throw new Error(`FIREWALL_BLOCK: ${errData.error}`);
+                } catch (jsonErr) {
+                    if (typeof jsonErr === 'object' && jsonErr.message && jsonErr.message.startsWith('FIREWALL_BLOCK')) throw jsonErr;
+                }
             }
         }
     } else if (IS_LOCALHOST) {
@@ -198,7 +250,7 @@ async function smartFetch(targetUrl, timeoutMs = 15000) {
     }
 
     // ── Strategy 2: Direct fetch (works if IPTV server has CORS headers) ──
-    if (_proxyMode === null || _proxyMode === 'direct') {
+    if (!IS_NATIVE && (_proxyMode === null || _proxyMode === 'direct')) {
         console.log(`[API] 🔀 [2/3] Direct fetch: ${targetUrl.substring(0, 60)}...`);
 
         const result = await tryFetch('Direct fetch', targetUrl, timeoutMs);
@@ -214,18 +266,20 @@ async function smartFetch(targetUrl, timeoutMs = 15000) {
         }
     }
 
-    // ── Strategy 3: Public CORS proxies (always available) ──
-    for (let i = 0; i < PUBLIC_PROXIES.length; i++) {
-        const proxyFn = PUBLIC_PROXIES[i];
-        const proxyUrl = proxyFn(targetUrl);
-        console.log(`[API] 🔀 [3/3] Public proxy #${i + 1}: ${proxyUrl.substring(0, 65)}...`);
+    // ── Strategy 3: Public CORS proxies (web fallback) ──
+    if (!IS_NATIVE) {
+        for (let i = 0; i < PUBLIC_PROXIES.length; i++) {
+            const proxyFn = PUBLIC_PROXIES[i];
+            const proxyUrl = proxyFn(targetUrl);
+            console.log(`[API] 🔀 [3/3] Public proxy #${i + 1}: ${proxyUrl.substring(0, 65)}...`);
 
-        const result = await tryFetch(`Public proxy #${i + 1}`, proxyUrl, timeoutMs);
-        if (result.success) {
-            _proxyMode = 'public';
-            return result.response;
+            const result = await tryFetch(`Public proxy #${i + 1}`, proxyUrl, timeoutMs);
+            if (result.success) {
+                _proxyMode = 'public';
+                return result.response;
+            }
+            lastError = result;
         }
-        lastError = result;
     }
 
     // ── All strategies exhausted ──
