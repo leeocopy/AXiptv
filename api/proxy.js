@@ -1,13 +1,12 @@
-const http = require('http');
-const https = require('https');
+import http from 'http';
+import https from 'https';
 
-module.exports = (req, res) => {
-    // CORS — must be set BEFORE any response
+export default function handler(req, res) {
+    // CORS
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-    // Handle preflight
     if (req.method === 'OPTIONS') {
         res.statusCode = 204;
         res.end();
@@ -51,41 +50,32 @@ module.exports = (req, res) => {
     const proxyReq = protocol.request(targetUrl, options, (proxyRes) => {
         console.log('[Proxy] <-', proxyRes.statusCode, proxyRes.headers['content-type']);
 
-        // Set Content-Type from upstream
         res.setHeader('Content-Type', proxyRes.headers['content-type'] || 'application/json');
         res.statusCode = proxyRes.statusCode;
 
-        // Pipe upstream response directly to client
         proxyRes.pipe(res);
     });
 
     proxyReq.on('error', (err) => {
         console.error('[Proxy] ERROR:', err.message);
-        // Only send error if headers haven't been sent yet
         if (!res.headersSent) {
             res.statusCode = 502;
             res.setHeader('Content-Type', 'application/json');
             res.end(JSON.stringify({
                 error: 'Proxy failed to connect to IPTV server',
-                details: err.message,
-                host: parsedUrl.hostname,
-                port: parsedUrl.port || '80'
+                details: err.message
             }));
         }
     });
 
     proxyReq.on('timeout', () => {
-        console.error('[Proxy] TIMEOUT for', parsedUrl.hostname);
         proxyReq.destroy();
         if (!res.headersSent) {
             res.statusCode = 504;
             res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify({
-                error: 'Gateway Timeout - IPTV server did not respond in 25s',
-                host: parsedUrl.hostname
-            }));
+            res.end(JSON.stringify({ error: 'Gateway Timeout' }));
         }
     });
 
     proxyReq.end();
-};
+}
