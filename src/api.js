@@ -89,21 +89,41 @@ async function tryFetch(label, fetchUrl, timeoutMs) {
             return { success: true, response: resp };
         }
 
-        // Not OK — log the status and try to read error body
+        // Not OK — log the exact status and try to read error body
         let errorBody = '';
+        let isProxyError = false;
+        let proxyErrorMsg = '';
         try { errorBody = await resp.text(); } catch (_) { }
+
         console.warn(`[API] ⚠️ ${label} → HTTP ${resp.status} ${resp.statusText}`);
         if (errorBody) {
-            console.warn(`[API] ⚠️ ${label} response body: ${errorBody.substring(0, 300)}`);
+            console.warn(`[API] ⚠️ ${label} response body: ${errorBody.substring(0, 400)}`);
+            // Check if the error body is a JSON proxy error
+            try {
+                const errJson = JSON.parse(errorBody);
+                if (errJson.proxyError) {
+                    isProxyError = true;
+                    proxyErrorMsg = errJson.error || `Proxy error (HTTP ${resp.status})`;
+                    if (errJson.suggestion) console.info(`[API] 💡 ${errJson.suggestion}`);
+                }
+            } catch (_) { /* not JSON, that's fine */ }
         }
-        return { success: false, status: resp.status, statusText: resp.statusText, body: errorBody };
+
+        return {
+            success: false,
+            status: resp.status,
+            statusText: resp.statusText,
+            body: errorBody,
+            isProxyError,
+            proxyErrorMsg,
+        };
 
     } catch (e) {
         clearTimeout(tid);
         const isAbort = e.name === 'AbortError';
         const isMixed = e.message && e.message.includes('Mixed Content');
         console.warn(`[API] ⚠️ ${label} → ${isAbort ? 'TIMEOUT' : isMixed ? 'MIXED CONTENT BLOCKED' : e.message}`);
-        return { success: false, error: e.message, isTimeout: isAbort, isMixedContent: isMixed };
+        return { success: false, error: e.message, isTimeout: isAbort, isMixedContent: isMixed, isProxyError: true, proxyErrorMsg: e.message };
     }
 }
 
@@ -347,15 +367,27 @@ export const xtreamService = {
 
             console.log(`[API] 📦 Raw response (first 500 chars): ${text.substring(0, 500)}`);
 
+            // Check if the proxy returned an error JSON
+            // (this happens when the proxy itself connected OK but the upstream server failed)
             let data;
             try {
                 data = JSON.parse(text);
             } catch (parseErr) {
                 console.error(`[API] 🔴 Response is not valid JSON: ${parseErr.message}`);
                 console.error(`[API] 🔴 Response text: ${text.substring(0, 200)}`);
-                return false;
+                // Not JSON = likely HTML error page from the server
+                throw new Error('PROXY_ERROR: Server returned invalid response (not JSON). The IPTV server may be down or the URL is wrong.');
             }
 
+            // Detect proxy error responses (our proxy sets proxyError: true)
+            if (data && data.proxyError === true) {
+                const msg = data.error || 'Proxy connection failed';
+                console.error(`[API] 🔴 Proxy connection error: ${msg}`);
+                if (data.suggestion) console.info(`[API] 💡 ${data.suggestion}`);
+                throw new Error(`PROXY_ERROR: ${msg}`);
+            }
+
+            // Real Xtream API response
             if (data && data.user_info) {
                 const ui = data.user_info;
                 console.log('[API] 📋 User info:', JSON.stringify(ui, null, 2));
@@ -366,24 +398,31 @@ export const xtreamService = {
                     this._serverInfo = data.server_info || null;
                     return true;
                 } else {
-                    console.error(`[API] 🔴 Auth FAILED — Status: ${ui.status}, Auth: ${ui.auth}`);
-                    return false;
+                    // This is a REAL auth failure (wrong username/password)
+                    console.error(`[API] 🔴 Auth DENIED — Status: ${ui.status}, Auth: ${ui.auth}`);
+                    console.error('[API] 🔴 This means the server responded but rejected your credentials.');
+                    return false; // returns false (NOT a throw) = "wrong password" in UI
                 }
             }
 
-            // Non-standard response
+            // Non-standard response — but it IS valid JSON from the server
             if (data && typeof data === 'object') {
+                // Check if it's an error-like object (some servers return {"error": "..."} )
+                if (data.error) {
+                    console.error(`[API] 🔴 Server error response: ${data.error}`);
+                    throw new Error(`PROXY_ERROR: Server returned error: ${data.error}`);
+                }
                 console.log('[API] ✅ Got JSON response (non-standard format), treating as success');
                 this._authenticated = true;
                 return true;
             }
 
             console.error('[API] 🔴 Unexpected response format');
-            return false;
+            throw new Error('PROXY_ERROR: Unexpected response format from server.');
         } catch (error) {
-            console.error('[API] 🔴 Authentication FAILED:', error.message);
-            console.error('[API] 🔴 Stack:', error.stack);
-            throw error; // Re-throw so the UI can show the error
+            console.error('[API] 🔴 Authentication error:', error.message);
+            // Re-throw — the UI handler in App.jsx will check for PROXY_ERROR prefix
+            throw error;
         }
     },
 

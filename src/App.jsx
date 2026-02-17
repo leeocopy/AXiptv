@@ -1191,14 +1191,21 @@ function Login({ onLogin, savedCreds, savedAccounts, onSelectAccount, onDeleteSa
         setStatus('success');
         setTimeout(() => onLogin(formData), 800);
       } else {
+        // authenticate() returned false = server responded but rejected credentials
         setStatus('error');
-        setErrorMsg('Authentication failed. Check your username/password.');
-        setTimeout(() => setStatus('idle'), 3000);
+        setErrorMsg('Authentication failed. The server rejected your username/password.');
+        setTimeout(() => setStatus('idle'), 4000);
       }
     } catch (err) {
       setStatus('error');
-      setErrorMsg(`Connection failed: ${err.message}`);
-      setTimeout(() => setStatus('idle'), 4000);
+      // Check if this is a proxy/connection error vs auth error
+      if (err.message && err.message.startsWith('PROXY_ERROR:')) {
+        const detail = err.message.replace('PROXY_ERROR: ', '');
+        setErrorMsg(`Proxy Connection Error: ${detail}`);
+      } else {
+        setErrorMsg(`Connection failed: ${err.message}`);
+      }
+      setTimeout(() => setStatus('idle'), 6000);
     }
   };
 
