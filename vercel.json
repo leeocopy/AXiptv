@@ -1,8 +1,17 @@
 {
+    "functions": {
+        "api/proxy.cjs": {
+            "runtime": "@vercel/node@3"
+        }
+    },
     "rewrites": [
         {
             "source": "/api/proxy",
             "destination": "/api/proxy.cjs"
+        },
+        {
+            "source": "/((?!api/).*)",
+            "destination": "/index.html"
         }
     ]
 }
