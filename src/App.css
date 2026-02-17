@@ -1252,35 +1252,76 @@ html {
 }
 
 /* Media Query for Landscape / TV / Tablet */
-@media (min-width: 768px) {
+/* Media Query for Landscape / TV / Tablet */
+@media (min-width: 768px),
+(orientation: landscape) {
+  .app-container {
+    padding: 5%;
+    /* TV Safe Area */
+    align-items: center;
+  }
+
   .content-wrapper {
     flex-direction: row;
-    /* Switch to row layout */
-    justify-content: space-between;
+    /* Horizontal layout */
+    justify-content: center;
     align-items: center;
-    gap: 4rem;
+    gap: 5%;
+    width: 100%;
+    max-width: 1400px;
     padding: 0;
   }
 
   .branding-section {
+    flex: 0 0 40%;
+    /* Takes 40% of width */
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
     align-items: flex-start;
-    /* Left-align on desktop */
+    /* Left align */
     text-align: left;
-    padding-left: 1rem;
+    padding: 0;
+  }
+
+  .login-section {
+    flex: 0 0 50%;
+    /* Takes 50% of width */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+
+  .glass-card {
+    width: 100%;
+    max-width: 450px;
+    max-height: 85vh;
+    /* Ensure it fits on screen vertical */
+    overflow-y: auto;
+    /* Scroll if it gets too tall */
+    margin: 0;
   }
 
   .logo-container {
     align-items: flex-start;
     max-width: 100%;
+    margin-bottom: 1rem;
   }
 
   .tv-icon {
-    width: 160px;
-    /* Larger on desktop */
+    width: 130px;
+    /* Good size for TV */
+    margin-bottom: 0.5rem;
   }
 
   .brand-title {
-    font-size: 4rem;
+    font-size: 3.5rem;
+    line-height: 1.1;
+  }
+
+  .brand-tagline {
+    font-size: 1.1rem;
+    margin-top: 0.5rem;
   }
 }
 
