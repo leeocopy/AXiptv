@@ -106,10 +106,28 @@ const BackIcon = () => (
   </svg>
 );
 const LogoutIcon = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="input-icon">
-    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
-    <polyline points="16 17 21 12 16 7"></polyline>
-    <line x1="21" y1="12" x2="9" y2="12"></line>
+  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" />
+    <polyline points="16 17 21 12 16 7" />
+    <line x1="21" y1="12" x2="9" y2="12" />
+  </svg>
+);
+
+const TrashIcon = () => (
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2">
+    <polyline points="3 6 5 6 21 6" />
+    <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+    <line x1="10" y1="11" x2="10" y2="17" />
+    <line x1="14" y1="11" x2="14" y2="17" />
+  </svg>
+);
+
+const UsersIcon = () => (
+  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2" />
+    <circle cx="9" cy="7" r="4" />
+    <path d="M23 21v-2a4 4 0 00-3-3.87" />
+    <path d="M16 3.13a4 4 0 010 7.75" />
   </svg>
 );
 
@@ -933,10 +951,11 @@ function SeriesDetail({ seriesItem, onBack }) {
   );
 }
 
-function Dashboard({ user, onSelectCategory, onLogout }) {
+function Dashboard({ user, onSelectCategory, onLogout, onManageUsers, onDeleteAccount }) {
   const [continueWatchingList, setContinueWatchingList] = useState([]);
   const [favoritesList, setFavoritesList] = useState([]);
   const [dashReady, setDashReady] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
 
   useEffect(() => {
     const username = user || 'guest';
@@ -961,6 +980,39 @@ function Dashboard({ user, onSelectCategory, onLogout }) {
     <div className={`dashboard-container ${dashReady ? 'view-enter-active' : 'view-enter'}`}>
       {/* Ambient Background */}
       <div className="ambient-bg-layer dashboard-ambient" />
+
+      {/* Settings Overlay */}
+      {showSettings && (
+        <div className="settings-overlay" onClick={() => setShowSettings(false)}>
+          <div className="settings-panel" onClick={(e) => e.stopPropagation()}>
+            <div className="settings-header">
+              <h2>Settings</h2>
+              <button className="settings-close" onClick={() => setShowSettings(false)}>✕</button>
+            </div>
+            <div className="settings-body">
+              <div className="settings-section">
+                <h3>Account</h3>
+                <div className="settings-info">
+                  <span className="settings-label">Active User:</span>
+                  <span className="settings-value">{user || 'Guest'}</span>
+                </div>
+              </div>
+              <div className="settings-section">
+                <h3>Actions</h3>
+                <button className="settings-action-btn" onClick={() => { setShowSettings(false); onManageUsers(); }}>
+                  <UsersIcon /> Manage Users / Switch Account
+                </button>
+                <button className="settings-action-btn" onClick={onLogout}>
+                  <LogoutIcon /> Logout (Keep Account Saved)
+                </button>
+                <button className="settings-action-btn danger" onClick={() => { if (window.confirm('Delete this account from saved list? This cannot be undone.')) { setShowSettings(false); onDeleteAccount(); } }}>
+                  <TrashIcon /> Delete Active Account
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Top Bar */}
       <header className="top-bar">
@@ -991,8 +1043,8 @@ function Dashboard({ user, onSelectCategory, onLogout }) {
             <SearchIcon />
             <span>Search</span>
           </div>
-          <div className="nav-item">
-            <NotificationIcon />
+          <div className="nav-item" onClick={onManageUsers} title="Manage Users" tabIndex={0} style={{ cursor: 'pointer' }}>
+            <UsersIcon />
           </div>
           <div className="user-profile">
             <div className="avatar">
@@ -1094,7 +1146,7 @@ function Dashboard({ user, onSelectCategory, onLogout }) {
           <MultiScreenIcon />
           <span>Multi-Screen</span>
         </button>
-        <button className="nav-btn" tabIndex={0}>
+        <button className="nav-btn" onClick={() => setShowSettings(true)} tabIndex={0}>
           <SettingsIcon />
           <span>Settings</span>
         </button>
@@ -1103,7 +1155,7 @@ function Dashboard({ user, onSelectCategory, onLogout }) {
   );
 }
 
-function Login({ onLogin, savedCreds, savedAccounts, onSelectAccount }) {
+function Login({ onLogin, savedCreds, savedAccounts, onSelectAccount, onDeleteSavedAccount }) {
   const [formData, setFormData] = useState({
     playlistName: '',
     username: '',
@@ -1146,7 +1198,14 @@ function Login({ onLogin, savedCreds, savedAccounts, onSelectAccount }) {
     } catch (err) {
       setStatus('error');
       setErrorMsg(`Connection failed: ${err.message}`);
-      setTimeout(() => setStatus('idle'), 3000);
+      setTimeout(() => setStatus('idle'), 4000);
+    }
+  };
+
+  const handleDeleteUser = (e, acc) => {
+    e.stopPropagation();
+    if (window.confirm(`Delete account "${acc.playlistName || acc.username}"?`)) {
+      onDeleteSavedAccount(acc.username, acc.portalUrl);
     }
   };
 
@@ -1188,7 +1247,7 @@ function Login({ onLogin, savedCreds, savedAccounts, onSelectAccount }) {
                 onClick={() => setShowUsers(!showUsers)}
                 type="button"
               >
-                <UserIcon /> {showUsers ? 'New Login' : `Saved Users (${accounts.length})`}
+                <UsersIcon /> {showUsers ? 'New Login' : `Saved Users (${accounts.length})`}
               </button>
             )}
 
@@ -1208,7 +1267,9 @@ function Login({ onLogin, savedCreds, savedAccounts, onSelectAccount }) {
                       <div className="saved-user-name">{acc.playlistName || acc.username}</div>
                       <div className="saved-user-url">{acc.portalUrl}</div>
                     </div>
-                    <div className="saved-user-arrow">→</div>
+                    <button className="saved-user-delete" onClick={(e) => handleDeleteUser(e, acc)} title="Delete this account">
+                      <TrashIcon />
+                    </button>
                   </div>
                 ))}
               </div>
@@ -1250,6 +1311,71 @@ function Login({ onLogin, savedCreds, savedAccounts, onSelectAccount }) {
   );
 }
 
+// =============================================
+// MANAGE USERS PAGE
+// =============================================
+function ManageUsersPage({ accounts, activeUser, onSelectAccount, onDeleteAccount, onBack, onAddNew }) {
+  return (
+    <div className="dashboard-container manage-users-view">
+      <div className="ambient-bg-layer dashboard-ambient" />
+      <header className="listing-header">
+        <button className="back-btn" onClick={onBack} tabIndex={0}>
+          <BackIcon />
+          <span>Back to Dashboard</span>
+        </button>
+        <h1 className="series-header-title">MANAGE USERS</h1>
+        <div style={{ width: 140 }} />
+      </header>
+
+      <main className="manage-users-content">
+        <div className="manage-users-grid">
+          {accounts.map((acc, idx) => {
+            const isActive = acc.username === activeUser;
+            return (
+              <div
+                key={`${acc.username}-${acc.portalUrl}-${idx}`}
+                className={`manage-user-card ${isActive ? 'active' : ''}`}
+              >
+                <div className="manage-user-top">
+                  <div className="manage-user-avatar">
+                    <UserIcon />
+                  </div>
+                  {isActive && <span className="manage-user-active-badge">ACTIVE</span>}
+                </div>
+                <div className="manage-user-name">{acc.playlistName || acc.username}</div>
+                <div className="manage-user-url">{acc.portalUrl}</div>
+                <div className="manage-user-meta">
+                  <span>User: {acc.username}</span>
+                </div>
+                <div className="manage-user-actions">
+                  {!isActive && (
+                    <button className="manage-user-btn switch" onClick={() => onSelectAccount(acc)}>
+                      Switch
+                    </button>
+                  )}
+                  <button className="manage-user-btn delete" onClick={() => {
+                    if (window.confirm(`Delete "${acc.playlistName || acc.username}" from saved accounts?`)) {
+                      onDeleteAccount(acc.username, acc.portalUrl);
+                    }
+                  }}>
+                    <TrashIcon /> Delete
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+
+          {/* Add New Account Card */}
+          <div className="manage-user-card add-new" onClick={onAddNew}>
+            <div className="add-new-icon">+</div>
+            <div className="manage-user-name">Add New Account</div>
+          </div>
+        </div>
+      </main>
+    </div>
+  );
+}
+
 function SplashScreen({ message }) {
   return (
     <div className="app-container splash-screen">
@@ -1275,7 +1401,7 @@ function SplashScreen({ message }) {
 }
 
 function App() {
-  const [view, setView] = useState('splash');  // splash | login | dashboard | listing
+  const [view, setView] = useState('splash');  // splash | login | dashboard | listing | manageUsers
   const [currentUser, setCurrentUser] = useState(null);
   const [activeCategory, setActiveCategory] = useState(null);
   const [splashMsg, setSplashMsg] = useState('Initializing...');
@@ -1300,14 +1426,13 @@ function App() {
         // Initialize API service
         xtreamService.init(active.portalUrl, active.username, active.password);
 
-        // Quick auth check (with timeout so it doesn't hang)
+        // Quick auth check
         try {
           const success = await xtreamService.authenticate();
           if (success) {
             setSplashMsg('Welcome back!');
             touchAccount(active.username, active.portalUrl);
             setCurrentUser(active.username);
-            // Brief pause so the user sees the splash
             setTimeout(() => setView('dashboard'), 600);
             return;
           }
@@ -1316,7 +1441,6 @@ function App() {
         }
 
         // Auth failed but we have saved creds — still go to dashboard
-        // (the user might be offline, or server temporarily down)
         setSplashMsg('Offline mode — loading saved data...');
         setCurrentUser(active.username);
         setTimeout(() => setView('dashboard'), 800);
@@ -1331,22 +1455,18 @@ function App() {
   }, []);
 
   // ============================================
-  // LOGIN HANDLER — Save to activeAccount + accounts list
+  // LOGIN HANDLER
   // ============================================
   const handleLogin = (creds) => {
-    // Save as active account: localStorage.setItem('activeAccount', JSON.stringify(data))
     setActiveAccount(creds);
-
-    // Save to multi-user accounts list
     const updatedAccounts = saveAccount(creds);
     setAccountsList(updatedAccounts);
-
     setCurrentUser(creds.username);
     setView('dashboard');
   };
 
   // ============================================
-  // SELECT SAVED ACCOUNT — Quick re-login
+  // SELECT SAVED ACCOUNT
   // ============================================
   const handleSelectAccount = async (acc) => {
     setView('splash');
@@ -1372,6 +1492,38 @@ function App() {
     setActiveAccount(acc);
     setCurrentUser(acc.username);
     setView('dashboard');
+  };
+
+  // ============================================
+  // DELETE A SAVED ACCOUNT (from accounts list)
+  // ============================================
+  const handleDeleteSavedAccount = (username, portalUrl) => {
+    const updated = removeAccount(username, portalUrl);
+    setAccountsList(updated);
+
+    // If we deleted the active account, also clear it
+    const active = getActiveAccount();
+    if (active && active.username === username && active.portalUrl === portalUrl) {
+      clearActiveAccount();
+      setCurrentUser(null);
+      xtreamService.init('', '', '');
+      setView('login');
+    }
+  };
+
+  // ============================================
+  // DELETE ACTIVE ACCOUNT — remove + redirect to login
+  // ============================================
+  const handleDeleteCurrentAccount = () => {
+    const active = getActiveAccount();
+    if (active) {
+      removeAccount(active.username, active.portalUrl);
+    }
+    clearActiveAccount();
+    setCurrentUser(null);
+    xtreamService.init('', '', '');
+    setAccountsList(getAllAccounts());
+    setView('login');
   };
 
   // ============================================
@@ -1406,6 +1558,7 @@ function App() {
           onLogin={handleLogin}
           savedAccounts={accountsList}
           onSelectAccount={handleSelectAccount}
+          onDeleteSavedAccount={handleDeleteSavedAccount}
         />
       )}
       {view === 'dashboard' && (
@@ -1413,6 +1566,8 @@ function App() {
           user={currentUser}
           onSelectCategory={handleSelectCategory}
           onLogout={handleLogout}
+          onManageUsers={() => setView('manageUsers')}
+          onDeleteAccount={handleDeleteCurrentAccount}
         />
       )}
       {view === 'listing' && (
@@ -1420,6 +1575,16 @@ function App() {
           category={activeCategory}
           onBack={handleBackToDashboard}
           username={currentUser}
+        />
+      )}
+      {view === 'manageUsers' && (
+        <ManageUsersPage
+          accounts={accountsList}
+          activeUser={currentUser}
+          onSelectAccount={handleSelectAccount}
+          onDeleteAccount={handleDeleteSavedAccount}
+          onBack={handleBackToDashboard}
+          onAddNew={() => { handleLogout(); }}
         />
       )}
     </>
