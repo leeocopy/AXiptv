@@ -2,33 +2,42 @@
 // Xtream Codes API Service
 // ============================================
 // - Uses Vercel Serverless Proxy (/api/proxy) to bypass CORS + Mixed Content
-// - Falls back to public CORS proxies for local dev
-// - Full debug logging visible in browser console (F12)
+// - Falls back to public CORS proxies on localhost
+// - Full debug logging — open browser console (F12) to see everything
 
 const MOCK_DELAY = 800;
+
+// ============================================
+// ENVIRONMENT DETECTION
+// ============================================
+const _hostname = typeof window !== 'undefined' ? window.location.hostname : '';
+const IS_LOCALHOST = _hostname === 'localhost' || _hostname === '127.0.0.1' || _hostname === '';
+const IS_VERCEL = !IS_LOCALHOST && (
+    _hostname.endsWith('.vercel.app') ||
+    _hostname.endsWith('.vercel.sh') ||
+    // Custom domain on Vercel — we'll detect via the proxy working
+    !IS_LOCALHOST
+);
+
+console.log(`[API] 🌐 Environment: hostname=${_hostname}, IS_LOCALHOST=${IS_LOCALHOST}, IS_VERCEL=${IS_VERCEL}`);
 
 // ============================================
 // PROXY CONFIGURATION
 // ============================================
 
-// Detect if running on Vercel (production) or localhost (dev)
-const IS_PRODUCTION = typeof window !== 'undefined' &&
-    !window.location.hostname.includes('localhost') &&
-    !window.location.hostname.includes('127.0.0.1');
-
-// Our own Vercel serverless proxy (most reliable — no CORS, no Mixed Content)
+// Vercel serverless proxy — only works when deployed on Vercel
 function getVercelProxyUrl(url) {
-    // In production: use relative path (same domain)
-    // In dev: try relative path too (Vite will proxy if configured)
     return `/api/proxy?url=${encodeURIComponent(url)}`;
 }
 
-// Public CORS proxies (fallback for local development)
+// Public CORS proxies (fallback — works everywhere)
 const PUBLIC_PROXIES = [
     (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
     (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+    (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
 ];
 
+// Track which proxy method works (cached after first success)
 let _proxyMode = null; // 'vercel' | 'public' | 'direct' | null
 
 // ============================================
@@ -65,92 +74,127 @@ function buildApiUrl(baseUrl, username, password, action = null) {
 }
 
 // ============================================
-// SMART FETCH — Tries proxy strategies in order
+// HELPER — try a single fetch, log status
+// ============================================
+async function tryFetch(label, fetchUrl, timeoutMs) {
+    const controller = new AbortController();
+    const tid = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+        const resp = await fetch(fetchUrl, { signal: controller.signal });
+        clearTimeout(tid);
+
+        if (resp.ok) {
+            console.log(`[API] ✅ ${label} → HTTP ${resp.status} OK`);
+            return { success: true, response: resp };
+        }
+
+        // Not OK — log the status and try to read error body
+        let errorBody = '';
+        try { errorBody = await resp.text(); } catch (_) { }
+        console.warn(`[API] ⚠️ ${label} → HTTP ${resp.status} ${resp.statusText}`);
+        if (errorBody) {
+            console.warn(`[API] ⚠️ ${label} response body: ${errorBody.substring(0, 300)}`);
+        }
+        return { success: false, status: resp.status, statusText: resp.statusText, body: errorBody };
+
+    } catch (e) {
+        clearTimeout(tid);
+        const isAbort = e.name === 'AbortError';
+        const isMixed = e.message && e.message.includes('Mixed Content');
+        console.warn(`[API] ⚠️ ${label} → ${isAbort ? 'TIMEOUT' : isMixed ? 'MIXED CONTENT BLOCKED' : e.message}`);
+        return { success: false, error: e.message, isTimeout: isAbort, isMixedContent: isMixed };
+    }
+}
+
+// ============================================
+// SMART FETCH — Tries strategies in priority order
 // ============================================
 async function smartFetch(targetUrl, timeoutMs = 15000) {
-    console.log(`[API] 📡 Fetching: ${targetUrl}`);
+    console.log(`[API] ─────────────────────────────────────`);
+    console.log(`[API] 📡 smartFetch: ${targetUrl}`);
 
-    // Strategy 1: Vercel Proxy (always try first — handles CORS + Mixed Content)
-    if (_proxyMode === null || _proxyMode === 'vercel') {
-        try {
-            const proxyUrl = getVercelProxyUrl(targetUrl);
-            console.log(`[API] 🔀 Trying Vercel proxy: ${proxyUrl}`);
-            const controller = new AbortController();
-            const tid = setTimeout(() => controller.abort(), timeoutMs);
-            const resp = await fetch(proxyUrl, { signal: controller.signal });
-            clearTimeout(tid);
+    let lastError = null;
 
-            if (resp.ok) {
-                _proxyMode = 'vercel';
-                console.log('[API] ✅ Vercel proxy worked');
-                return resp;
-            }
+    // ── Strategy 1: Vercel Proxy (SKIP on localhost) ──
+    if (!IS_LOCALHOST && (_proxyMode === null || _proxyMode === 'vercel')) {
+        const proxyUrl = getVercelProxyUrl(targetUrl);
+        console.log(`[API] 🔀 [1/3] Vercel proxy: ${proxyUrl.substring(0, 80)}...`);
 
-            // 404 means the proxy route doesn't exist (not on Vercel)
-            if (resp.status === 404) {
-                console.log('[API] ⚠️ Vercel proxy not found (404), trying alternatives...');
-            } else {
-                console.warn(`[API] ⚠️ Vercel proxy returned status ${resp.status}`);
-            }
-        } catch (e) {
-            console.warn(`[API] ⚠️ Vercel proxy error: ${e.message}`);
+        const result = await tryFetch('Vercel proxy', proxyUrl, timeoutMs);
+        if (result.success) {
+            _proxyMode = 'vercel';
+            return result.response;
         }
+
+        lastError = result;
+
+        // If 404 → proxy route doesn't exist on this deployment
+        if (result.status === 404) {
+            console.warn('[API] ⚠️ /api/proxy returned 404. Is the api/proxy.js file deployed?');
+            console.warn('[API] ⚠️ Check: your repo must have api/proxy.js in the root (not src/)');
+        }
+        // If 500/502/504 → proxy exists but the upstream server failed
+        else if (result.status >= 500) {
+            console.warn(`[API] ⚠️ Vercel proxy responded but upstream failed (HTTP ${result.status})`);
+            // Parse the structured error if possible
+            if (result.body) {
+                try {
+                    const errData = JSON.parse(result.body);
+                    if (errData.error) console.error(`[API] 🔴 Proxy error: ${errData.error}`);
+                    if (errData.suggestion) console.info(`[API] 💡 ${errData.suggestion}`);
+                } catch (_) { }
+            }
+        }
+    } else if (IS_LOCALHOST) {
+        console.log('[API] 🏠 Localhost detected — skipping Vercel proxy');
     }
 
-    // Strategy 2: Direct fetch (works if IPTV server has CORS headers)
+    // ── Strategy 2: Direct fetch (works if IPTV server has CORS headers) ──
     if (_proxyMode === null || _proxyMode === 'direct') {
-        try {
-            console.log(`[API] 🔀 Trying direct fetch...`);
-            const controller = new AbortController();
-            const tid = setTimeout(() => controller.abort(), timeoutMs);
-            const resp = await fetch(targetUrl, { signal: controller.signal });
-            clearTimeout(tid);
+        console.log(`[API] 🔀 [2/3] Direct fetch: ${targetUrl.substring(0, 60)}...`);
 
-            if (resp.ok) {
-                _proxyMode = 'direct';
-                console.log('[API] ✅ Direct fetch worked (server has CORS headers)');
-                return resp;
-            }
-        } catch (e) {
-            console.warn(`[API] ⚠️ Direct fetch blocked: ${e.message}`);
-            if (e.message.includes('Mixed Content')) {
-                console.error('[API] 🔴 MIXED CONTENT ERROR: Your HTTPS app is trying to fetch from an HTTP server.');
-                console.error('[API] 🔴 Solution: Deploy the Vercel proxy (/api/proxy.js) or use an HTTPS IPTV server.');
-            }
+        const result = await tryFetch('Direct fetch', targetUrl, timeoutMs);
+        if (result.success) {
+            _proxyMode = 'direct';
+            return result.response;
+        }
+        lastError = result;
+
+        if (result.isMixedContent) {
+            console.error('[API] 🔴 MIXED CONTENT: HTTPS page cannot fetch from HTTP server.');
+            console.error('[API] 🔴 Fix: Deploy with Vercel proxy OR use an HTTPS IPTV server URL.');
         }
     }
 
-    // Strategy 3: Public CORS proxies (fallback)
+    // ── Strategy 3: Public CORS proxies (always available) ──
     for (let i = 0; i < PUBLIC_PROXIES.length; i++) {
         const proxyFn = PUBLIC_PROXIES[i];
-        try {
-            const proxyUrl = proxyFn(targetUrl);
-            console.log(`[API] 🔀 Trying public proxy #${i + 1}: ${proxyUrl.substring(0, 60)}...`);
-            const controller = new AbortController();
-            const tid = setTimeout(() => controller.abort(), timeoutMs);
-            const resp = await fetch(proxyUrl, { signal: controller.signal });
-            clearTimeout(tid);
+        const proxyUrl = proxyFn(targetUrl);
+        console.log(`[API] 🔀 [3/3] Public proxy #${i + 1}: ${proxyUrl.substring(0, 65)}...`);
 
-            if (resp.ok) {
-                _proxyMode = 'public';
-                console.log(`[API] ✅ Public proxy #${i + 1} worked`);
-                return resp;
-            }
-        } catch (e) {
-            console.warn(`[API] ⚠️ Public proxy #${i + 1} failed: ${e.message}`);
+        const result = await tryFetch(`Public proxy #${i + 1}`, proxyUrl, timeoutMs);
+        if (result.success) {
+            _proxyMode = 'public';
+            return result.response;
         }
+        lastError = result;
     }
 
-    // All strategies failed
-    const errorMsg = IS_PRODUCTION
-        ? 'All proxies failed. Make sure /api/proxy.js is deployed on Vercel.'
-        : 'All fetch methods failed. CORS or Mixed Content may be blocking the request.';
+    // ── All strategies exhausted ──
+    const lastStatus = lastError?.status ? ` (last HTTP status: ${lastError.status})` : '';
+    const lastDetail = lastError?.error ? ` (${lastError.error})` : '';
 
-    console.error(`[API] 🔴 FETCH FAILED: ${errorMsg}`);
-    console.error(`[API] 🔴 Target URL: ${targetUrl}`);
-    console.error(`[API] 🔴 Debug info: Production=${IS_PRODUCTION}, ProxyMode=${_proxyMode}`);
+    const errMsg = IS_LOCALHOST
+        ? `All CORS proxies failed${lastStatus}${lastDetail}. Public proxies may be down or IPTV server is unreachable.`
+        : `All proxies failed${lastStatus}${lastDetail}. Ensure api/proxy.js is deployed and the IPTV server is reachable.`;
 
-    throw new Error(errorMsg);
+    console.error(`[API] 🔴 ═══ ALL FETCH STRATEGIES FAILED ═══`);
+    console.error(`[API] 🔴 Target: ${targetUrl}`);
+    console.error(`[API] 🔴 Env: localhost=${IS_LOCALHOST}, proxyMode=${_proxyMode}`);
+    console.error(`[API] 🔴 ${errMsg}`);
+
+    throw new Error(errMsg);
 }
 
 // ============================================

@@ -1,77 +1,113 @@
 // Vercel Serverless Function — CORS Proxy for Xtream API
-// This runs server-side, so it bypasses:
-//   1. CORS (browser blocks cross-origin requests)
-//   2. Mixed Content (HTTPS page can't fetch HTTP resources)
+// Runs server-side → bypasses CORS + Mixed Content
 //
-// Usage: GET /api/proxy?url=http://server.com:port/player_api.php?username=x&password=y&action=...
+// Usage:  GET /api/proxy?url=http://server.com:port/player_api.php?username=x&password=y
+// Vercel auto-maps: /api/proxy → api/proxy.js (this file)
+//
+// IMPORTANT: Must use module.exports (CommonJS) for Vercel Node.js runtime
 
-export default async function handler(req, res) {
-    // Allow all origins (or restrict to your domain)
+module.exports = async function handler(req, res) {
+    // ── CORS headers on EVERY response ──
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Max-Age', '86400');
 
-    // Handle preflight
+    // Handle preflight (OPTIONS)
     if (req.method === 'OPTIONS') {
-        return res.status(200).end();
+        return res.status(204).end();
     }
 
+    // ── Extract target URL ──
     const targetUrl = req.query.url;
 
     if (!targetUrl) {
         return res.status(400).json({
-            error: 'Missing "url" query parameter',
-            usage: '/api/proxy?url=http://server.com:port/player_api.php?username=x&password=y&action=get_live_categories'
+            ok: false,
+            error: 'Missing "url" query parameter.',
+            usage: '/api/proxy?url=http://server.com:port/player_api.php?username=USER&password=PASS',
+            hint: 'The full Xtream URL (including query params) must be passed as the "url" param.'
         });
     }
 
-    // Validate URL format
+    // ── Validate URL ──
+    let parsedUrl;
     try {
-        const parsed = new URL(targetUrl);
-        if (!['http:', 'https:'].includes(parsed.protocol)) {
-            return res.status(400).json({ error: 'URL must use http or https protocol' });
+        parsedUrl = new URL(targetUrl);
+        if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+            return res.status(400).json({
+                ok: false,
+                error: `Invalid protocol "${parsedUrl.protocol}". Must be http: or https:.`,
+                receivedUrl: targetUrl
+            });
         }
     } catch (e) {
-        return res.status(400).json({ error: `Invalid URL: ${e.message}` });
+        return res.status(400).json({
+            ok: false,
+            error: `Invalid URL format: ${e.message}`,
+            receivedUrl: targetUrl,
+            hint: 'URL must be a valid http:// or https:// URL.'
+        });
     }
 
-    console.log(`[Proxy] Fetching: ${targetUrl}`);
+    console.log(`[Proxy] → ${req.method} ${parsedUrl.hostname}:${parsedUrl.port || '80'}${parsedUrl.pathname}`);
 
+    // ── Fetch from the real server ──
     try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 20000); // 20s timeout
+        const timeoutId = setTimeout(() => controller.abort(), 25000); // 25s timeout
 
-        const response = await fetch(targetUrl, {
-            method: 'GET',
+        const fetchOptions = {
+            method: req.method === 'POST' ? 'POST' : 'GET',
             signal: controller.signal,
             headers: {
-                'User-Agent': 'IPTVStream/1.0',
-                'Accept': 'application/json, text/plain, */*',
+                'User-Agent': 'IPTVStreamProxy/2.0',
+                'Accept': '*/*',
             },
-        });
+        };
 
+        // Forward POST body if needed
+        if (req.method === 'POST' && req.body) {
+            fetchOptions.body = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+            fetchOptions.headers['Content-Type'] = req.headers['content-type'] || 'application/json';
+        }
+
+        const upstream = await fetch(targetUrl, fetchOptions);
         clearTimeout(timeoutId);
 
-        const contentType = response.headers.get('content-type') || '';
-        const body = await response.text();
+        const body = await upstream.text();
+        const contentType = upstream.headers.get('content-type') || 'application/json; charset=utf-8';
 
-        // Forward the response
-        res.setHeader('Content-Type', contentType || 'application/json');
-        res.setHeader('X-Proxy-Status', response.status.toString());
-        return res.status(response.status).send(body);
+        // Forward upstream status + headers
+        res.setHeader('Content-Type', contentType);
+        res.setHeader('X-Proxy-Upstream-Status', upstream.status.toString());
+        res.setHeader('X-Proxy-Upstream-Url', parsedUrl.hostname);
+
+        console.log(`[Proxy] ← ${upstream.status} (${body.length} bytes)`);
+
+        return res.status(upstream.status).send(body);
 
     } catch (error) {
-        console.error(`[Proxy] Error: ${error.message}`);
+        console.error(`[Proxy] ERROR: ${error.name}: ${error.message}`);
 
-        const isTimeout = error.name === 'AbortError';
-        const statusCode = isTimeout ? 504 : 502;
+        if (error.name === 'AbortError') {
+            return res.status(504).json({
+                ok: false,
+                error: 'Gateway Timeout — the IPTV server did not respond within 25 seconds.',
+                targetHost: parsedUrl.hostname,
+                targetPort: parsedUrl.port || '80',
+                suggestion: 'The server may be down, blocking requests, or unreachable from Vercel\'s network.'
+            });
+        }
 
-        return res.status(statusCode).json({
-            error: isTimeout ? 'Request timed out (20s)' : `Proxy fetch failed: ${error.message}`,
-            targetUrl,
-            suggestion: isTimeout
-                ? 'The IPTV server may be down or unreachable from this region.'
-                : 'Check if the server URL and port are correct.',
+        // Connection refused, DNS failure, etc.
+        return res.status(502).json({
+            ok: false,
+            error: `Bad Gateway — could not connect to the IPTV server.`,
+            detail: `${error.name}: ${error.message}`,
+            targetHost: parsedUrl.hostname,
+            targetPort: parsedUrl.port || '80',
+            suggestion: 'Check that the server URL and port are correct and the server is online.'
         });
     }
-}
+};
