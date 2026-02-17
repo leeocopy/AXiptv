@@ -1,9 +1,79 @@
 // Xtream Codes API Service
 // Handles authentication and data fetching for Live TV, Movies, and Series
+// Now with CORS proxy support for browser-based access
 
 const MOCK_DELAY = 800;
 
+// ============================================
+// CORS PROXY — Bypass browser CORS restrictions
+// ============================================
+// Xtream servers don't set CORS headers, so browser blocks fetch().
+// We try direct first, then fallback to CORS proxies.
+
+const CORS_PROXIES = [
+    (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+    (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+    (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
+];
+
+let activeCorsProxy = null; // Cache working proxy
+
+async function fetchWithCorsProxy(url, timeoutMs = 12000) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+    // 1. Try direct fetch first (works if server has CORS headers or same-origin)
+    try {
+        const resp = await fetch(url, { signal: controller.signal });
+        clearTimeout(timeoutId);
+        if (resp.ok) {
+            activeCorsProxy = null; // Direct works
+            return resp;
+        }
+    } catch (e) {
+        clearTimeout(timeoutId);
+        // CORS blocked or network error — try proxies
+    }
+
+    // 2. If we have a cached working proxy, try it first
+    if (activeCorsProxy) {
+        try {
+            const controller2 = new AbortController();
+            const tid2 = setTimeout(() => controller2.abort(), timeoutMs);
+            const proxyUrl = activeCorsProxy(url);
+            const resp = await fetch(proxyUrl, { signal: controller2.signal });
+            clearTimeout(tid2);
+            if (resp.ok) return resp;
+        } catch (e) {
+            activeCorsProxy = null; // Cached proxy failed
+        }
+    }
+
+    // 3. Try each proxy in order
+    for (const proxyFn of CORS_PROXIES) {
+        try {
+            const controller3 = new AbortController();
+            const tid3 = setTimeout(() => controller3.abort(), timeoutMs);
+            const proxyUrl = proxyFn(url);
+            const resp = await fetch(proxyUrl, { signal: controller3.signal });
+            clearTimeout(tid3);
+            if (resp.ok) {
+                activeCorsProxy = proxyFn; // Cache for future calls
+                console.log('[API] CORS proxy found and cached');
+                return resp;
+            }
+        } catch (e) {
+            // Try next proxy
+            continue;
+        }
+    }
+
+    throw new Error(`All CORS proxies failed for: ${url}`);
+}
+
+// ============================================
 // Mock Data for fallback/demo purposes
+// ============================================
 const MOCK_DATA = {
     liveCategories: [
         { category_id: '1', category_name: 'Sports' },
@@ -39,7 +109,6 @@ const MOCK_DATA = {
         { series_id: 201, name: 'Stranger Things', cover: '', rating: '8.7', category_id: '20', container_extension: 'mp4' },
         { series_id: 202, name: 'Game of Thrones', cover: '', rating: '9.3', category_id: '21', container_extension: 'mkv' },
     ],
-    // Mock series info for detail pages
     seriesInfo: {
         201: {
             info: {
@@ -95,27 +164,33 @@ const MOCK_DATA = {
     }
 };
 
+// ============================================
+// XTREAM SERVICE
+// ============================================
 export const xtreamService = {
     baseUrl: '',
     username: '',
     password: '',
+    _authenticated: false, // Track if we actually verified creds
+    _serverInfo: null,     // Cache server info from auth response
 
     init(url, user, pass) {
-        this.baseUrl = url;
-        this.username = user;
-        this.password = pass;
+        // Normalize URL: remove trailing slash
+        this.baseUrl = (url || '').replace(/\/+$/, '');
+        this.username = user || '';
+        this.password = pass || '';
+        this._authenticated = false;
+        this._serverInfo = null;
     },
 
-    // Build stream URL for the player
-    // Xtream Codes API URL formats:
-    //   Live TV:  http://{host}:{port}/live/{username}/{password}/{stream_id}.ts     (most compatible)
-    //   Live HLS: http://{host}:{port}/live/{username}/{password}/{stream_id}.m3u8   (HLS adaptive)
-    //   Live Alt: http://{host}:{port}/{username}/{password}/{stream_id}              (some panels)
-    //   Movies:   http://{host}:{port}/movie/{username}/{password}/{stream_id}.{ext}
-    //   Series:   http://{host}:{port}/series/{username}/{password}/{stream_id}.{ext}
+    // Build the player_api.php base URL
+    _apiBase() {
+        return `${this.baseUrl}/player_api.php?username=${encodeURIComponent(this.username)}&password=${encodeURIComponent(this.password)}`;
+    },
+
+    // Build stream URL for the player (direct - no proxy needed for media streams)
     getStreamUrl(streamId, type = 'live', containerExtension = null) {
         if (!this.baseUrl) {
-            // Demo/mock mode: return public test streams
             if (type === 'live') {
                 return 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8';
             }
@@ -123,12 +198,10 @@ export const xtreamService = {
         }
 
         if (type === 'live') {
-            // Live TV: use /live/ prefix with .ts as the primary format (most compatible)
             const ext = containerExtension || 'ts';
             return `${this.baseUrl}/live/${this.username}/${this.password}/${streamId}.${ext}`;
         }
 
-        // Movies and Series use the container extension from the API
         const ext = containerExtension || 'mp4';
         const prefix = type === 'movie' ? 'movie' : 'series';
         return `${this.baseUrl}/${prefix}/${this.username}/${this.password}/${streamId}.${ext}`;
@@ -140,42 +213,62 @@ export const xtreamService = {
             return ['https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8'];
         }
         return [
-            // 1. Primary: /live/ prefix with .ts (MPEG-TS, most servers)
             `${this.baseUrl}/live/${this.username}/${this.password}/${streamId}.ts`,
-            // 2. HLS variant with /live/ prefix
             `${this.baseUrl}/live/${this.username}/${this.password}/${streamId}.m3u8`,
-            // 3. Without /live/ prefix (some panels)
             `${this.baseUrl}/${this.username}/${this.password}/${streamId}.ts`,
-            // 4. HLS without /live/ prefix
             `${this.baseUrl}/${this.username}/${this.password}/${streamId}.m3u8`,
         ];
     },
 
-    // Check if the IPTV server is reachable
-    async checkServerReachable() {
-        if (!this.baseUrl) return { reachable: true, mode: 'mock' };
+    // ============================================
+    // AUTHENTICATE — Actually verify credentials
+    // ============================================
+    async authenticate() {
+        if (!this.baseUrl) {
+            // No URL = demo mode, auto-pass
+            this._authenticated = true;
+            return true;
+        }
+
+        const url = this._apiBase();
+        console.log('[API] Authenticating with:', this.baseUrl);
+
         try {
-            // Try to reach the player_api endpoint (lightweight)
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 5000);
-            const response = await fetch(
-                `${this.baseUrl}/player_api.php?username=${this.username}&password=${this.password}`,
-                { signal: controller.signal, mode: 'no-cors' }
-            );
-            clearTimeout(timeoutId);
-            return { reachable: true, status: response.status };
-        } catch (err) {
-            return { reachable: false, error: err.message };
+            const response = await fetchWithCorsProxy(url, 15000);
+            const data = await response.json();
+
+            // Xtream API returns user_info with auth status
+            if (data && data.user_info) {
+                const userInfo = data.user_info;
+                if (userInfo.auth === 1 || userInfo.auth === '1' || userInfo.status === 'Active') {
+                    console.log('[API] ✅ Authentication successful:', userInfo.username);
+                    this._authenticated = true;
+                    this._serverInfo = data.server_info || null;
+                    return true;
+                } else {
+                    console.warn('[API] ❌ Auth failed — account not active:', userInfo.status);
+                    return false;
+                }
+            }
+
+            // Some servers return differently — if we got a JSON response, consider it OK
+            if (data && typeof data === 'object') {
+                console.log('[API] ✅ Got response from server (non-standard format)');
+                this._authenticated = true;
+                return true;
+            }
+
+            return false;
+        } catch (error) {
+            console.error('[API] ❌ Authentication failed:', error.message);
+            return false;
         }
     },
 
-    async authenticate() {
-        // In a real app, verify credentials here
-        return new Promise(resolve => setTimeout(() => resolve(true), MOCK_DELAY));
-    },
-
+    // ============================================
+    // GET CATEGORIES
+    // ============================================
     async getCategories(type = 'live') {
-        // action: get_live_categories, get_vod_categories, get_series_categories
         let action = 'get_live_categories';
         let mockKey = 'liveCategories';
 
@@ -190,17 +283,28 @@ export const xtreamService = {
         if (!this.baseUrl) return MOCK_DATA[mockKey];
 
         try {
-            const response = await fetch(`${this.baseUrl}/player_api.php?username=${this.username}&password=${this.password}&action=${action}`);
-            if (!response.ok) throw new Error('Network response was not ok');
-            return await response.json();
+            const url = `${this._apiBase()}&action=${action}`;
+            console.log(`[API] Fetching categories: ${action}`);
+            const response = await fetchWithCorsProxy(url);
+            const data = await response.json();
+
+            if (Array.isArray(data) && data.length > 0) {
+                console.log(`[API] ✅ Got ${data.length} categories`);
+                return data;
+            }
+
+            console.warn('[API] Categories response was empty or invalid, using mock');
+            return MOCK_DATA[mockKey];
         } catch (error) {
-            console.warn('API fetch failed, falling back to mock data', error);
+            console.warn('[API] Categories fetch failed, using mock:', error.message);
             return MOCK_DATA[mockKey];
         }
     },
 
+    // ============================================
+    // GET STREAMS
+    // ============================================
     async getStreams(type = 'live', categoryId = null) {
-        // action: get_live_streams, get_vod_streams, get_series
         let action = 'get_live_streams';
         let mockKey = 'liveStreams';
 
@@ -208,7 +312,7 @@ export const xtreamService = {
             action = 'get_vod_streams';
             mockKey = 'vodStreams';
         } else if (type === 'series') {
-            action = 'get_series'; // xtream codes uses get_series, not get_series_streams
+            action = 'get_series';
             mockKey = 'series';
         }
 
@@ -221,33 +325,38 @@ export const xtreamService = {
         }
 
         try {
-            let url = `${this.baseUrl}/player_api.php?username=${this.username}&password=${this.password}&action=${action}`;
+            let url = `${this._apiBase()}&action=${action}`;
             if (categoryId && categoryId !== 'All') {
                 url += `&category_id=${categoryId}`;
             }
-            const response = await fetch(url);
-            if (!response.ok) throw new Error('Network response was not ok');
-            return await response.json();
-        } catch (error) {
-            console.warn('API fetch failed, falling back to mock data', error);
-            let data = MOCK_DATA[mockKey];
-            if (categoryId && categoryId !== 'All') {
-                data = data.filter(item => item.category_id === categoryId);
+            console.log(`[API] Fetching streams: ${action}${categoryId ? ` (cat: ${categoryId})` : ''}`);
+            const response = await fetchWithCorsProxy(url);
+            const data = await response.json();
+
+            if (Array.isArray(data) && data.length > 0) {
+                console.log(`[API] ✅ Got ${data.length} streams`);
+                return data;
             }
-            return data;
+
+            console.warn('[API] Streams response was empty or invalid');
+            // Don't fall back to mock if we have a real server — just show empty
+            return [];
+        } catch (error) {
+            console.warn('[API] Streams fetch failed:', error.message);
+            // Return empty rather than mock when real server is configured
+            return [];
         }
     },
 
-    // Fetch detailed series info (seasons + episodes)
-    // Xtream API: action=get_series_info&series_id={id}
+    // ============================================
+    // GET SERIES INFO
+    // ============================================
     async getSeriesInfo(seriesId) {
         if (!this.baseUrl) {
-            // Mock data
             const mockInfo = MOCK_DATA.seriesInfo[seriesId];
             if (mockInfo) {
                 return new Promise(resolve => setTimeout(() => resolve(mockInfo), MOCK_DELAY));
             }
-            // Fallback generic mock
             return new Promise(resolve => setTimeout(() => resolve({
                 info: {
                     name: 'Unknown Series',
@@ -269,20 +378,33 @@ export const xtreamService = {
         }
 
         try {
-            const response = await fetch(
-                `${this.baseUrl}/player_api.php?username=${this.username}&password=${this.password}&action=get_series_info&series_id=${seriesId}`
-            );
-            if (!response.ok) throw new Error('Network response was not ok');
+            const url = `${this._apiBase()}&action=get_series_info&series_id=${seriesId}`;
+            console.log(`[API] Fetching series info: ${seriesId}`);
+            const response = await fetchWithCorsProxy(url);
             const data = await response.json();
             return {
                 info: data.info || {},
                 seasons: data.episodes || {},
             };
         } catch (error) {
-            console.warn('Series info fetch failed, using mock', error);
+            console.warn('[API] Series info fetch failed:', error.message);
             const mockInfo = MOCK_DATA.seriesInfo[seriesId];
             return mockInfo || { info: {}, seasons: {} };
         }
+    },
+
+    // ============================================
+    // GET ACCOUNT INFO (Server + User details)
+    // ============================================
+    async getAccountInfo() {
+        if (!this.baseUrl) return null;
+        try {
+            const url = this._apiBase();
+            const response = await fetchWithCorsProxy(url);
+            return await response.json();
+        } catch (error) {
+            console.warn('[API] Account info fetch failed:', error.message);
+            return null;
+        }
     }
 };
-

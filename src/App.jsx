@@ -2,7 +2,13 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { xtreamService } from './api';
 import VideoPlayer from './VideoPlayer';
 import { extractDominantColor, colorToAmbientGradient } from './colorExtract';
-import { getFavorites, toggleFavorite, isFavorite, getContinueWatching, updateWatchProgress, removeFromWatching } from './userStore';
+import {
+  getFavorites, toggleFavorite, isFavorite,
+  getContinueWatching, updateWatchProgress, removeFromWatching,
+  setActiveAccount, getActiveAccount, clearActiveAccount,
+  saveAccount, getAllAccounts, removeAccount,
+  migrateFromLegacy, addRecentStream, getRecentStreams, touchAccount
+} from './userStore';
 import './App.css';
 import './VideoPlayer.css';
 
@@ -1097,7 +1103,7 @@ function Dashboard({ user, onSelectCategory, onLogout }) {
   );
 }
 
-function Login({ onLogin, savedCreds }) {
+function Login({ onLogin, savedCreds, savedAccounts, onSelectAccount }) {
   const [formData, setFormData] = useState({
     playlistName: '',
     username: '',
@@ -1105,12 +1111,12 @@ function Login({ onLogin, savedCreds }) {
     portalUrl: ''
   });
   const [status, setStatus] = useState('idle');
+  const [errorMsg, setErrorMsg] = useState('');
+  const [showUsers, setShowUsers] = useState(false);
 
   useEffect(() => {
-    // Pre-fill if available
     if (savedCreds) {
       setFormData(savedCreds);
-      // Optional: Auto-submit? No, let user confirm or just use the persistence logic in App to skip this entirely.
     }
   }, [savedCreds]);
 
@@ -1119,23 +1125,32 @@ function Login({ onLogin, savedCreds }) {
     setFormData(prevState => ({ ...prevState, [name]: value }));
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     setStatus('loading');
+    setErrorMsg('');
 
-    // Simulate API Auth via Service
+    // Initialize the API service with the entered credentials
     xtreamService.init(formData.portalUrl, formData.username, formData.password);
 
-    xtreamService.authenticate().then((success) => {
+    try {
+      const success = await xtreamService.authenticate();
       if (success) {
         setStatus('success');
-        setTimeout(() => onLogin(formData), 1500);
+        setTimeout(() => onLogin(formData), 800);
       } else {
         setStatus('error');
-        setTimeout(() => setStatus('idle'), 2000);
+        setErrorMsg('Authentication failed. Check your username/password.');
+        setTimeout(() => setStatus('idle'), 3000);
       }
-    });
+    } catch (err) {
+      setStatus('error');
+      setErrorMsg(`Connection failed: ${err.message}`);
+      setTimeout(() => setStatus('idle'), 3000);
+    }
   };
+
+  const accounts = savedAccounts || [];
 
   return (
     <div className="app-container login-mode">
@@ -1166,32 +1181,68 @@ function Login({ onLogin, savedCreds }) {
 
         <div className="login-section">
           <div className="glass-card">
-            <h2 className="login-header">Login Details</h2>
-            <form onSubmit={handleSubmit}>
-              {['playlistName', 'username', 'password', 'portalUrl'].map((field) => (
-                <div className="input-container" key={field}>
-                  {field === 'playlistName' && <ListIcon />}
-                  {field === 'username' && <UserIcon />}
-                  {field === 'password' && <LockIcon />}
-                  {field === 'portalUrl' && <GlobeIcon />}
-                  <input
-                    type={field === 'password' ? 'password' : 'text'}
-                    name={field}
-                    placeholder={field.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}
-                    value={formData[field]}
-                    onChange={handleChange}
-                    className="glass-input with-icon"
-                    required
-                    disabled={status === 'loading'}
-                  />
-                </div>
-              ))}
-              <button type="submit" className={`glow-button ${status === 'loading' ? 'loading' : ''}`} disabled={status === 'loading'}>
-                {status === 'loading' ? 'CONNECTING...' : 'ADD USER'}
+            {/* Saved Users Toggle */}
+            {accounts.length > 0 && (
+              <button
+                className="saved-users-toggle"
+                onClick={() => setShowUsers(!showUsers)}
+                type="button"
+              >
+                <UserIcon /> {showUsers ? 'New Login' : `Saved Users (${accounts.length})`}
               </button>
-              {status === 'success' && <div className="status-message success">User added successfully! Redirecting...</div>}
-              {status === 'error' && <div className="status-message error">Connection failed. Check details.</div>}
-            </form>
+            )}
+
+            {/* Saved Users List */}
+            {showUsers && accounts.length > 0 ? (
+              <div className="saved-users-list">
+                <h2 className="login-header">Select Account</h2>
+                {accounts.map((acc, idx) => (
+                  <div
+                    key={`${acc.username}-${acc.portalUrl}-${idx}`}
+                    className="saved-user-card"
+                    onClick={() => onSelectAccount(acc)}
+                    tabIndex={0}
+                  >
+                    <div className="saved-user-avatar"><UserIcon /></div>
+                    <div className="saved-user-info">
+                      <div className="saved-user-name">{acc.playlistName || acc.username}</div>
+                      <div className="saved-user-url">{acc.portalUrl}</div>
+                    </div>
+                    <div className="saved-user-arrow">→</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              /* Login Form */
+              <>
+                <h2 className="login-header">Login Details</h2>
+                <form onSubmit={handleSubmit}>
+                  {['playlistName', 'username', 'password', 'portalUrl'].map((field) => (
+                    <div className="input-container" key={field}>
+                      {field === 'playlistName' && <ListIcon />}
+                      {field === 'username' && <UserIcon />}
+                      {field === 'password' && <LockIcon />}
+                      {field === 'portalUrl' && <GlobeIcon />}
+                      <input
+                        type={field === 'password' ? 'password' : 'text'}
+                        name={field}
+                        placeholder={field === 'portalUrl' ? 'http://server.com:port' : field.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}
+                        value={formData[field]}
+                        onChange={handleChange}
+                        className="glass-input with-icon"
+                        required
+                        disabled={status === 'loading'}
+                      />
+                    </div>
+                  ))}
+                  <button type="submit" className={`glow-button ${status === 'loading' ? 'loading' : ''}`} disabled={status === 'loading'}>
+                    {status === 'loading' ? 'CONNECTING...' : 'ADD USER'}
+                  </button>
+                  {status === 'success' && <div className="status-message success">✅ Connected successfully! Loading...</div>}
+                  {status === 'error' && <div className="status-message error">❌ {errorMsg || 'Connection failed. Check details.'}</div>}
+                </form>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -1199,42 +1250,138 @@ function Login({ onLogin, savedCreds }) {
   );
 }
 
+function SplashScreen({ message }) {
+  return (
+    <div className="app-container splash-screen">
+      <div className="splash-content">
+        <svg className="splash-logo" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="splashGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stopColor="#60a5fa" /><stop offset="100%" stopColor="#c084fc" />
+            </linearGradient>
+          </defs>
+          <path d="M60 50 L100 90 L140 50" stroke="url(#splashGrad)" strokeWidth="10" fill="none" strokeLinecap="round" />
+          <rect x="40" y="80" width="120" height="90" rx="20" ry="20" stroke="url(#splashGrad)" strokeWidth="8" fill="none" />
+          <path d="M90 110 L120 125 L90 140 Z" fill="url(#splashGrad)" />
+        </svg>
+        <h1 className="splash-title">IPTV <span className="highlight-text">Stream</span></h1>
+        <div className="splash-loader">
+          <div className="splash-loader-bar" />
+        </div>
+        <p className="splash-message">{message || 'Loading...'}</p>
+      </div>
+    </div>
+  );
+}
+
 function App() {
-  const [view, setView] = useState('loading-auth'); // loading-auth | login | dashboard | listing
+  const [view, setView] = useState('splash');  // splash | login | dashboard | listing
   const [currentUser, setCurrentUser] = useState(null);
   const [activeCategory, setActiveCategory] = useState(null);
+  const [splashMsg, setSplashMsg] = useState('Initializing...');
+  const [accountsList, setAccountsList] = useState([]);
 
-  // Persistence Logic
+  // ============================================
+  // STARTUP: Check activeAccount in localStorage
+  // ============================================
   useEffect(() => {
-    const storedCreds = localStorage.getItem('iptv_credentials');
-    if (storedCreds) {
-      try {
-        const creds = JSON.parse(storedCreds);
-        // Auto-login logic
-        xtreamService.init(creds.portalUrl, creds.username, creds.password);
-        setCurrentUser(creds.username);
-        setView('dashboard');
-      } catch (e) {
-        console.error("Failed to parse credentials", e);
-        setView('login');
+    const startup = async () => {
+      // 1. Migrate from old 'iptv_credentials' key if needed
+      migrateFromLegacy();
+
+      // 2. Load saved accounts list
+      setAccountsList(getAllAccounts());
+
+      // 3. Check for active account
+      const active = getActiveAccount();
+      if (active && active.username && active.portalUrl) {
+        setSplashMsg('Connecting to server...');
+
+        // Initialize API service
+        xtreamService.init(active.portalUrl, active.username, active.password);
+
+        // Quick auth check (with timeout so it doesn't hang)
+        try {
+          const success = await xtreamService.authenticate();
+          if (success) {
+            setSplashMsg('Welcome back!');
+            touchAccount(active.username, active.portalUrl);
+            setCurrentUser(active.username);
+            // Brief pause so the user sees the splash
+            setTimeout(() => setView('dashboard'), 600);
+            return;
+          }
+        } catch (e) {
+          console.warn('[App] Auto-auth failed:', e.message);
+        }
+
+        // Auth failed but we have saved creds — still go to dashboard
+        // (the user might be offline, or server temporarily down)
+        setSplashMsg('Offline mode — loading saved data...');
+        setCurrentUser(active.username);
+        setTimeout(() => setView('dashboard'), 800);
+        return;
       }
-    } else {
-      setView('login');
-    }
+
+      // No active account — go to login
+      setTimeout(() => setView('login'), 400);
+    };
+
+    startup();
   }, []);
 
+  // ============================================
+  // LOGIN HANDLER — Save to activeAccount + accounts list
+  // ============================================
   const handleLogin = (creds) => {
-    // Save to LocalStorage
-    localStorage.setItem('iptv_credentials', JSON.stringify(creds));
+    // Save as active account: localStorage.setItem('activeAccount', JSON.stringify(data))
+    setActiveAccount(creds);
+
+    // Save to multi-user accounts list
+    const updatedAccounts = saveAccount(creds);
+    setAccountsList(updatedAccounts);
 
     setCurrentUser(creds.username);
     setView('dashboard');
   };
 
+  // ============================================
+  // SELECT SAVED ACCOUNT — Quick re-login
+  // ============================================
+  const handleSelectAccount = async (acc) => {
+    setView('splash');
+    setSplashMsg(`Connecting as ${acc.playlistName || acc.username}...`);
+
+    xtreamService.init(acc.portalUrl, acc.username, acc.password);
+
+    try {
+      const success = await xtreamService.authenticate();
+      if (success) {
+        setActiveAccount(acc);
+        touchAccount(acc.username, acc.portalUrl);
+        setCurrentUser(acc.username);
+        setSplashMsg('Connected!');
+        setTimeout(() => setView('dashboard'), 500);
+        return;
+      }
+    } catch (e) {
+      console.warn('[App] Select account auth failed:', e.message);
+    }
+
+    // Failed — still try to load (offline mode)
+    setActiveAccount(acc);
+    setCurrentUser(acc.username);
+    setView('dashboard');
+  };
+
+  // ============================================
+  // LOGOUT — Clear active, keep in accounts list
+  // ============================================
   const handleLogout = () => {
-    localStorage.removeItem('iptv_credentials');
+    clearActiveAccount();
     setCurrentUser(null);
-    xtreamService.init('', '', ''); // Clear service
+    xtreamService.init('', '', '');
+    setAccountsList(getAllAccounts());
     setView('login');
   };
 
@@ -1248,19 +1395,33 @@ function App() {
     setActiveCategory(null);
   };
 
-  if (view === 'loading-auth') {
-    return (
-      <div className="app-container">
-        <LoadingSpinner />
-      </div>
-    );
+  if (view === 'splash') {
+    return <SplashScreen message={splashMsg} />;
   }
 
   return (
     <>
-      {view === 'login' && <Login onLogin={handleLogin} />}
-      {view === 'dashboard' && <Dashboard user={currentUser} onSelectCategory={handleSelectCategory} onLogout={handleLogout} />}
-      {view === 'listing' && <ContentListing category={activeCategory} onBack={handleBackToDashboard} username={currentUser} />}
+      {view === 'login' && (
+        <Login
+          onLogin={handleLogin}
+          savedAccounts={accountsList}
+          onSelectAccount={handleSelectAccount}
+        />
+      )}
+      {view === 'dashboard' && (
+        <Dashboard
+          user={currentUser}
+          onSelectCategory={handleSelectCategory}
+          onLogout={handleLogout}
+        />
+      )}
+      {view === 'listing' && (
+        <ContentListing
+          category={activeCategory}
+          onBack={handleBackToDashboard}
+          username={currentUser}
+        />
+      )}
     </>
   );
 }
