@@ -1253,69 +1253,73 @@ html {
 
 /* Media Query for Landscape / TV / Tablet */
 /* Media Query for Landscape / TV / Tablet */
+/* Media Query for Landscape / TV / Tablet */
 @media (min-width: 768px),
 (orientation: landscape) {
   .app-container {
-    padding: 5%;
-    /* TV Safe Area */
-    align-items: center;
+    padding: 0;
+    /* Let content-wrapper handle spacing */
+    background-position: center;
   }
 
   .content-wrapper {
     flex-direction: row;
-    /* Horizontal layout */
     justify-content: center;
+    /* Center everything horizontally */
     align-items: center;
-    gap: 5%;
-    width: 100%;
-    max-width: 1400px;
-    padding: 0;
+    /* Center vertically */
+    gap: 60px;
+    /* Fixed gap keeps them together */
+    width: 95%;
+    max-width: 900px;
+    /* Tighter constraint */
+    padding: 40px;
+    margin: 0 auto;
   }
 
   .branding-section {
-    flex: 0 0 40%;
-    /* Takes 40% of width */
+    flex: 1;
+    /* Take available space but balanced */
     display: flex;
     flex-direction: column;
     justify-content: center;
-    align-items: flex-start;
-    /* Left align */
-    text-align: left;
+    align-items: flex-end;
+    /* Align towards center (Right) */
+    text-align: right;
     padding: 0;
   }
 
   .login-section {
-    flex: 0 0 50%;
-    /* Takes 50% of width */
+    flex: 1;
     display: flex;
-    justify-content: center;
+    justify-content: flex-start;
+    /* Align towards center (Left) */
     align-items: center;
+    padding: 0;
   }
 
   .glass-card {
     width: 100%;
-    max-width: 450px;
+    max-width: 380px;
+    /* Slightly tighter for landscape */
     max-height: 85vh;
-    /* Ensure it fits on screen vertical */
-    overflow-y: auto;
-    /* Scroll if it gets too tall */
     margin: 0;
   }
 
   .logo-container {
-    align-items: flex-start;
+    align-items: flex-end;
+    /* Align logo to right */
     max-width: 100%;
     margin-bottom: 1rem;
   }
 
   .tv-icon {
-    width: 130px;
-    /* Good size for TV */
+    width: 140px;
     margin-bottom: 0.5rem;
   }
 
   .brand-title {
-    font-size: 3.5rem;
+    font-size: 3rem;
     line-height: 1.1;
   }
 
